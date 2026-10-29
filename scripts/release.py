@@ -15,12 +15,14 @@ PACKAGE = "in.aayiravilly.chittattinkara"
 API = f"https://api.github.com/repos/{REPOSITORY}"
 
 
-def api(path):
-    request = urllib.request.Request(API + path, headers={
+def api(path, method="GET", body=None):
+    request = urllib.request.Request(API + path, method=method,
+                                    data=None if body is None else json.dumps(body).encode("utf-8"), headers={
         "Authorization": "Bearer " + os.environ["GH_TOKEN"],
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "Aayiravilly-release-workflow",
+        "Content-Type": "application/json",
     })
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -29,6 +31,23 @@ def api(path):
         if error.code == 404:
             return None
         raise RuntimeError(f"GitHub API returned HTTP {error.code}") from None
+
+
+def find_release(tag):
+    """The tag endpoint omits untagged drafts; authenticated listings include them."""
+    page = 1
+    matches = []
+    while True:
+        releases = api(f"/releases?per_page=100&page={page}")
+        if not isinstance(releases, list):
+            raise RuntimeError("Could not inspect existing releases, including drafts.")
+        matches.extend(item for item in releases if item.get("tag_name") == tag)
+        if len(releases) < 100:
+            break
+        page += 1
+    if len(matches) > 1:
+        raise ValueError("Multiple releases use this tag; inspect the drafts before publishing.")
+    return matches[0] if matches else None
 
 
 def configuration():
@@ -47,7 +66,7 @@ def configuration():
 
 
 def validate(name, code):
-    if api(f"/git/ref/tags/v{name}") or api(f"/releases/tags/v{name}"):
+    if api(f"/git/ref/tags/v{name}") or find_release(f"v{name}"):
         raise ValueError("That version/tag already exists. Inspect any draft before choosing another version.")
     latest = api("/releases/latest")
     if latest:
@@ -98,22 +117,28 @@ def publish(name, code, notes):
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     checksums = artifact_dir / "SHA256SUMS.txt"
     checksums.write_text(f"{digest}  {apk.name}\n", encoding="utf-8")
-    body = artifact_dir / "release-notes.md"
-    body.write_text(notes + "\n\nAndroid asks for confirmation before installing an APK update.\n\n"
-                    + f"APK SHA-256: `{digest}`\n", encoding="utf-8")
+    body = notes + "\n\nAndroid asks for confirmation before installing an APK update.\n\n" \
+        + f"APK SHA-256: `{digest}`\n"
     tag = "v" + name
-    subprocess.run(["gh", "release", "create", tag, "--repo", REPOSITORY,
-                    "--target", os.environ["GITHUB_SHA"], "--draft", "--title",
-                    "Aayiravilly Temple " + name, "--notes-file", str(body)], check=True)
+    created = api("/releases", method="POST", body={
+        "tag_name": tag, "target_commitish": os.environ["GITHUB_SHA"], "draft": True,
+        "name": "Aayiravilly Temple " + name, "body": body, "prerelease": False,
+    })
+    if not isinstance(created, dict) or not isinstance(created.get("id"), int):
+        raise RuntimeError("Draft creation returned no release ID; inspect GitHub before retrying.")
+    release_id = created["id"]
     subprocess.run(["gh", "release", "upload", tag, "--repo", REPOSITORY,
                     str(apk), str(manifest), str(checksums)], check=True)
-    release = api(f"/releases/tags/{tag}")
+    release = api(f"/releases/{release_id}")
+    if not isinstance(release, dict) or release.get("tag_name") != tag or not release.get("draft"):
+        raise RuntimeError("Could not verify the expected draft release; publication stopped.")
     expected_assets = {file.name: file.stat().st_size for file in (apk, manifest, checksums)}
     actual_assets = {item["name"]: item["size"] for item in release["assets"] if item["state"] == "uploaded"}
     if actual_assets != expected_assets:
         raise ValueError("Uploaded release assets are incomplete. The release remains a draft.")
-    subprocess.run(["gh", "release", "edit", tag, "--repo", REPOSITORY,
-                    "--draft=false", "--latest"], check=True)
+    published = api(f"/releases/{release_id}", method="PATCH", body={"draft": False, "make_latest": "true"})
+    if not isinstance(published, dict) or published.get("draft") is not False:
+        raise RuntimeError("GitHub did not confirm release publication; inspect its state before retrying.")
     print(f"Published https://github.com/{REPOSITORY}/releases/tag/{tag}")
 
 

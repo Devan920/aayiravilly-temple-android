@@ -54,6 +54,8 @@ The repository's signing secrets have been configured for releases. If migrating
 
 Push and review the intended changes, open **Actions → Publish Android APK → Run workflow**, select `main`, and enter a new version name, a larger integer version code, and release notes. For example, after `1.0.0` / `1`, use `1.0.1` / `2`. The workflow validates the previous release, signs the APK, uploads a complete draft, then publishes the APK and `update.json` together. Existing app installations discover that release at their next update check. A failed upload remains a draft for inspection; do not publish an incomplete draft manually.
 
+Existing drafts are detected even before their Git tag exists, so a retry cannot silently create a duplicate. Upload verification and publication use the exact draft release ID returned by GitHub.
+
 The stable update endpoint is:
 
 `https://github.com/Devan920/aayiravilly-temple-android/releases/latest/download/update.json`
