@@ -1,0 +1,43 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'in.aayiravilly.chittattinkara'
+    compileSdk 36
+    compileSdkMinor 1
+    defaultConfig {
+        applicationId 'in.aayiravilly.chittattinkara'
+        minSdk 26
+        targetSdk 36
+        versionCode = (project.findProperty('appVersionCode') ?: '1').toString().toInteger()
+        versionName = (project.findProperty('appVersionName') ?: '1.0.0').toString()
+        testInstrumentationRunner 'in.aayiravilly.chittattinkara.SmokeInstrumentation'
+        buildConfigField 'String', 'WEBSITE_URL', '"https://aayiravillytemplechittattinkara.ai.studio/"'
+        buildConfigField 'String', 'UPDATE_MANIFEST_URL', '"' + (project.findProperty('updateManifestUrl') ?: 'https://github.com/Devan920/aayiravilly-temple-android/releases/latest/download/update.json') + '"'
+    }
+    signingConfigs {
+        release {
+            def keyPath = System.getenv('TEMPLE_KEYSTORE')
+            if (keyPath) {
+                storeFile file(keyPath)
+                storePassword System.getenv('TEMPLE_STORE_PASSWORD')
+                keyAlias = (System.getenv('TEMPLE_KEY_ALIAS') ?: 'temple')
+                keyPassword System.getenv('TEMPLE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug { applicationIdSuffix '.debug'; versionNameSuffix '-debug' }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            if (System.getenv('TEMPLE_KEYSTORE')) signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    buildFeatures { buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies { implementation 'androidx.core:core:1.13.1' }

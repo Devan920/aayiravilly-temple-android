@@ -1,0 +1,71 @@
+name: Publish Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'New version, for example 1.0.1'
+        required: true
+        type: string
+      version_code:
+        description: 'Integer greater than the last release, for example 2'
+        required: true
+        type: string
+      release_notes:
+        description: 'What changed in this version'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    env:
+      VERSION_NAME: ${{ inputs.version_name }}
+      VERSION_CODE: ${{ inputs.version_code }}
+      RELEASE_NOTES: ${{ inputs.release_notes }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate release version
+        run: |
+          python3 -B scripts/test_release.py
+          python3 -B scripts/release.py validate
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install required Android packages
+        run: sdkmanager 'platforms;android-36.1' 'build-tools;36.0.0'
+      - name: Build signed APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          TEMPLE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TEMPLE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TEMPLE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_KEYSTORE_BASE64:?Signing keystore secret is missing}"
+          : "${TEMPLE_STORE_PASSWORD:?Signing password secret is missing}"
+          : "${TEMPLE_KEY_PASSWORD:?Signing key password secret is missing}"
+          : "${TEMPLE_KEY_ALIAS:?Signing alias secret is missing}"
+          export TEMPLE_KEYSTORE="$RUNNER_TEMP/temple-release.jks"
+          trap 'rm -f "$TEMPLE_KEYSTORE"' EXIT
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$TEMPLE_KEYSTORE"
+          bash gradlew --no-daemon assembleRelease "-PappVersionName=$VERSION_NAME" "-PappVersionCode=$VERSION_CODE"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
+      - name: Package and publish release
+        run: python3 -B scripts/release.py publish
